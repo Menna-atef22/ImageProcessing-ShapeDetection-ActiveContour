@@ -1,0 +1,7 @@
+build/
+results/*
+!results/.gitkeep
+*.user
+.vs/
+.vscode/
+out/
