@@ -86,7 +86,7 @@ GrayImage EdgeDetector::hysteresis(const GrayImage& nms, float lowThr, float hig
     // strong edges are the seeds
     for (int y = 0; y < H; ++y)
         for (int x = 0; x < W; ++x)
-            if (nms.at(x, y) >= highThr) {
+            if (nms.at(x, y) > 0.f && nms.at(x, y) >= highThr) {
                 out.at(x, y) = 255.f;
                 stack.push_back(y * W + x);
             }
@@ -100,7 +100,7 @@ GrayImage EdgeDetector::hysteresis(const GrayImage& nms, float lowThr, float hig
             for (int dx = -1; dx <= 1; ++dx) {
                 int nx = cx + dx, ny = cy + dy;
                 if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
-                if (out.at(nx, ny) == 0.f && nms.at(nx, ny) >= lowThr) {
+                if (out.at(nx, ny) == 0.f && nms.at(nx, ny) > 0.f && nms.at(nx, ny) >= lowThr) {
                     out.at(nx, ny) = 255.f;
                     stack.push_back(ny * W + nx);
                 }
