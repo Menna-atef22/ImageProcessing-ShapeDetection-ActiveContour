@@ -115,6 +115,7 @@ private:
     const EdgeResult& edgesFor(const CannyParams& p, bool force = false);  // worker thread only
     CannyParams cannyParams() const;
     std::vector<Point> initialContour() const;
+    bool polygonMode() const;  // true when the snake starts from the clicked polygon instead of a circle
     void showResult(const RgbImage& img, const QString& title, const QString& status = QString(), bool ok = true);
     void log(const QString& line);
     void logHeader(const QString& title);
@@ -157,5 +158,6 @@ private:
     EdgeResult m_edges;
     bool m_hasEdges = false;
     QString m_edgeKey;
-    std::vector<Point> m_snake;  // last evolved contour (input of the chain-code page)
+    std::vector<Point> m_snake;      // last evolved contour (input of the chain-code page)
+    std::vector<Point> m_snakePoly;  // points clicked by the user to define the starting contour
 };
