@@ -10,7 +10,7 @@ See **COMMANDS.md** for build & run instructions.
 ## Status
 - [x] Canny edge detector + Hough Lines
 - [ ] Circles + Ellipses
-- [ ] Active Contour (greedy snake)
+- [x] Active Contour (greedy snake)
 - [ ] Chain code, area / perimeter, GUI integration
 
 ## GUI
