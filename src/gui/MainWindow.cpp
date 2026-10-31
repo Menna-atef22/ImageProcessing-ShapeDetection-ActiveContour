@@ -56,7 +56,7 @@ constexpr double kPi = 3.14159265358979;
 
 // Flip a feature to `true` once its algorithm is implemented: its results then get saved to the library.
 // (While false, an empty result - "0 circles" - is shown but not saved, so the Compare tab stays clean.)
-bool isReady(const QString& feature) { return feature == "canny" || feature == "lines"; }
+bool isReady(const QString& feature) { return feature == "canny" || feature == "lines" || feature == "snake"; }
 
 void repolish(QWidget* w) {
     w->style()->unpolish(w);
@@ -103,6 +103,37 @@ QString hashPoints(const std::vector<Point>& pts) {
         h.addData(QByteArray::fromRawData(reinterpret_cast<const char*>(v), int(sizeof(v))));
     }
     return QString::fromLatin1(h.result().toHex().left(12));
+}
+
+// Resamples a closed polygon to n points spaced evenly along its perimeter.
+// The snake needs evenly spaced points, whereas the user clicks them at arbitrary distances.
+std::vector<Point> resamplePolygon(const std::vector<Point>& poly, int n) {
+    const size_t m = poly.size();
+    if (m < 3 || n < 3) return poly;
+
+    // cum[i] = perimeter length from poly[0] up to poly[i] (cum[m] = total, including the closing edge)
+    std::vector<double> cum(m + 1, 0.0);
+    for (size_t i = 0; i < m; ++i) {
+        const Point& a = poly[i];
+        const Point& b = poly[(i + 1) % m];
+        cum[i + 1] = cum[i] + std::hypot(double(b.x - a.x), double(b.y - a.y));
+    }
+    const double total = cum[m];
+    if (total <= 0.0) return poly;
+
+    std::vector<Point> out;
+    out.reserve(size_t(n));
+    size_t seg = 0;
+    for (int k = 0; k < n; ++k) {
+        const double d = total * k / n;  // arc length of the k-th sample
+        while (seg + 1 < m && cum[seg + 1] < d) ++seg;
+        const Point& a = poly[seg];
+        const Point& b = poly[(seg + 1) % m];
+        const double len = cum[seg + 1] - cum[seg];
+        const double t = len > 0.0 ? (d - cum[seg]) / len : 0.0;
+        out.push_back({int(std::lround(a.x + t * (b.x - a.x))), int(std::lround(a.y + t * (b.y - a.y)))});
+    }
+    return out;
 }
 
 QJsonArray contourToJson(const std::vector<Point>& pts) {
@@ -432,6 +463,7 @@ QJsonObject MainWindow::valuesFor(const QString& feature) const {
         }
     };
     add(feature, false);
+    if (feature == "snake" && polygonMode()) o["polygon"] = hashPoints(m_snakePoly);  // different outline = different result
     if (feature == "lines" || feature == "circles" || feature == "ellipses") add("canny", true);  // they run on the Canny edges
     return o;
 }
@@ -450,6 +482,7 @@ QStringList MainWindow::paramLines(const QString& feature) const {
     };
     add(feature, QString(), false);
     if (feature == "lines" || feature == "circles" || feature == "ellipses") add("canny", "Canny - ", true);
+    if (feature == "snake" && polygonMode()) out << QString("Start outline = %1 clicked points").arg(m_snakePoly.size());
     if (feature == "chain") out << QString("Snake contour points = %1").arg(m_snake.size());
     return out;
 }
@@ -533,6 +566,24 @@ QWidget* MainWindow::buildEllipsesPage() {
 }
 
 QWidget* MainWindow::buildSnakePage() {
+    auto* poly = addCheck("snake", "poly", "Trace the outline by clicking points (polygon start)", false);
+    auto* polyButtons = new QWidget;
+    auto* pbl = new QHBoxLayout(polyButtons);
+    pbl->setContentsMargins(0, 0, 0, 4);
+    auto* undoBtn = new QPushButton("Undo last point");
+    auto* clearBtn = new QPushButton("Clear points");
+    pbl->addWidget(undoBtn);
+    pbl->addWidget(clearBtn);
+    connect(undoBtn, &QPushButton::clicked, this, [this] {
+        if (!m_snakePoly.empty()) m_snakePoly.pop_back();
+        updateSnakePreview();
+    });
+    connect(clearBtn, &QPushButton::clicked, this, [this] {
+        m_snakePoly.clear();
+        updateSnakePreview();
+    });
+    connect(poly, &QCheckBox::toggled, this, [this] { updateSnakePreview(); });
+
     auto* cx = addParam("snake", "cx", "Centre X", "Horizontal centre of the starting circle. Tip: click on the Original image to set it.", 0, 1000, 1, 100, 0);
     auto* cy = addParam("snake", "cy", "Centre Y", "Vertical centre of the starting circle.", 0, 1000, 1, 100, 0);
     auto* r = addParam("snake", "r", "Start radius", "Radius of the starting circle. It should surround the object.", 5, 500, 1, 60, 0);
@@ -540,15 +591,18 @@ QWidget* MainWindow::buildSnakePage() {
     auto* alpha = addParam("snake", "alpha", "Alpha (continuity)", "Keeps points evenly spaced. Higher = more uniform spacing.", 0.0, 5.0, 0.1, 1.0, 1);
     auto* beta = addParam("snake", "beta", "Beta (curvature)", "Penalises sharp corners. Higher = smoother contour.", 0.0, 5.0, 0.1, 1.0, 1);
     auto* gamma = addParam("snake", "gamma", "Gamma (image force)", "Pull towards strong edges. Higher = snake sticks to the object.", 0.0, 5.0, 0.1, 1.2, 1);
-    auto* iter = addParam("snake", "iter", "Iterations", "How many times every point is moved.", 10, 1000, 10, 200, 0);
+    auto* iter = addParam("snake", "iter", "Iterations", "Maximum number of passes over all points. The snake stops earlier if no point moves any more.", 10, 1000, 10, 200, 0);
+    auto* win = addParam("snake", "window", "Search window", "Size of the neighbourhood each point searches for a better position (3 = 3x3, 5 = 5x5, ...). Larger = faster movement but less precise.", 3, 15, 2, 3, 0);
+    auto* sigma = addParam("snake", "sigma", "Edge smoothing (sigma)", "Gaussian blur applied before computing the edge map. Higher = the snake is attracted from further away but locks on less precisely.", 0.5, 10.0, 0.5, 2.0, 1);
+    auto* balloon = addParam("snake", "balloon", "Balloon (shrink force)", "Constant pressure that pulls every point towards the centre so the snake can travel through flat areas with no edge. 0 = off, negative = expand. If it slides past the object, lower it.", -3.0, 3.0, 0.1, 0.3, 1);
     auto* evo = addCheck("snake", "evolution", "Draw intermediate steps (evolution)", false);
     auto* run = new QPushButton("Evolve Snake");
     connect(run, &QPushButton::clicked, this, &MainWindow::runSnake);
     for (ParamRow* p : {cx, cy, r, n}) p->setOnChange([this] { updateSnakePreview(); });
     QLabel* stat = nullptr;
     return makePage(4, "A contour that starts around the object and shrinks onto its boundary, using the greedy algorithm (internal + external energy).",
-                    false, "Cyan = starting contour, yellow = final contour. The result feeds the Chain Code page.",
-                    {cx, cy, r, n, alpha, beta, gamma, iter, evo}, run, &stat);
+                    isReady("snake"), "Cyan = starting contour, yellow = final contour. Tick the polygon option and click around the object to draw your own starting contour. The result feeds the Chain Code page.",
+                    {poly, polyButtons, cx, cy, r, n, alpha, beta, gamma, balloon, iter, win, sigma, evo}, run, &stat);
 }
 
 QWidget* MainWindow::buildChainPage() {
@@ -587,12 +641,20 @@ QWidget* MainWindow::buildWorkspace() {
 
     m_origView = new ImageView("Open an image to start\n(or drag & drop a file here)");
     m_resultView = new ImageView("Choose a feature on the left\nand press its Run button");
-    connect(m_origView, &ImageView::clicked, this, [this](int x, int y) {
-        if (m_stack->currentIndex() != kSnakePage) return;
-        m_params["snake.cx"]->setValue(x);
-        m_params["snake.cy"]->setValue(y);
+    // A click on either image sets the starting contour of the snake:
+    // a new polygon point in polygon mode, otherwise the centre of the starting circle.
+    auto onImageClick = [this](int x, int y) {
+        if (m_stack->currentIndex() != kSnakePage || m_busy) return;
+        if (polygonMode()) {
+            m_snakePoly.push_back({x, y});
+        } else {
+            m_params["snake.cx"]->setValue(x);
+            m_params["snake.cy"]->setValue(y);
+        }
         updateSnakePreview();
-    });
+    };
+    connect(m_origView, &ImageView::clicked, this, onImageClick);
+    connect(m_resultView, &ImageView::clicked, this, onImageClick);
     connect(m_origView, &ImageView::viewChanged, m_resultView, &ImageView::setView);  // zoom both together
     connect(m_resultView, &ImageView::viewChanged, m_origView, &ImageView::setView);
 
@@ -778,6 +840,7 @@ void MainWindow::applyImage() {
     m_gray = toGray(m_original);
     m_hasEdges = false;
     m_snake.clear();
+    m_snakePoly.clear();
     m_result = RgbImage();
     m_resultView->clear();
     m_resultTitle->clear();
@@ -1153,7 +1216,13 @@ void MainWindow::runEllipses() {
     });
 }
 
+bool MainWindow::polygonMode() const {
+    QCheckBox* c = m_checks.value("snake.poly", nullptr);
+    return c && c->isChecked();
+}
+
 std::vector<Point> MainWindow::initialContour() const {
+    if (polygonMode()) return resamplePolygon(m_snakePoly, PI("snake.n"));  // fewer than 3 clicks: returned unchanged
     std::vector<Point> pts;
     int n = PI("snake.n");
     double cx = P("snake.cx"), cy = P("snake.cy"), r = P("snake.r");
@@ -1167,16 +1236,31 @@ std::vector<Point> MainWindow::initialContour() const {
 void MainWindow::updateSnakePreview() {
     if (m_original.empty() || m_busy || m_stack->currentIndex() != kSnakePage) return;
     RgbImage out = m_original;
+    if (polygonMode()) {
+        // Show the clicked points as they are (before resampling); close the shape once it has 3 points.
+        drawPolyline(out, m_snakePoly, {0, 220, 255}, m_snakePoly.size() >= 3);
+        const int dotRadius = std::max(3, m_original.width / 250);  // stays visible on large images
+        for (const Point& p : m_snakePoly) Draw::dot(out, p.x, p.y, dotRadius, {255, 60, 60});
+        showResult(out, QString("Outline: %1 point(s) - click on the image to add more (at least 3)").arg(m_snakePoly.size()), "", true);
+        return;
+    }
     drawPolyline(out, initialContour(), {0, 220, 255});
     showResult(out, "Starting contour (preview - not saved)", "", true);
 }
 
 void MainWindow::runSnake() {
+    if (polygonMode() && m_snakePoly.size() < 3) {
+        log("Polygon start: click at least 3 points around the object first.");
+        return;
+    }
     SnakeParams sp;
     sp.alpha = P("snake.alpha");
     sp.beta = P("snake.beta");
     sp.gamma = P("snake.gamma");
     sp.iterations = PI("snake.iter");
+    sp.window = PI("snake.window");
+    sp.sigma = P("snake.sigma");
+    sp.balloon = P("snake.balloon");
     std::vector<Point> init = initialContour();
     bool evolution = m_checks["snake.evolution"]->isChecked();
     launch("snake", isReady("snake"), [this, sp, init, evolution] {
@@ -1195,12 +1279,16 @@ void MainWindow::runSnake() {
         drawPolyline(out, init, {0, 220, 255});
         o.image = ActiveContour::drawContour(out, finalC);
         o.title = "Snake: cyan = start, yellow = final";
-        o.stat = QString("%1 contour points  -  %2 iterations  -  %3 ms").arg(finalC.size()).arg(sp.iterations).arg(ms);
-        o.log << QString("alpha=%1  beta=%2  gamma=%3  iterations=%4  points=%5")
-                     .arg(sp.alpha).arg(sp.beta).arg(sp.gamma).arg(sp.iterations).arg(init.size())
+        // history[0] is the initial contour, so the number of iterations actually performed is size - 1.
+        const size_t usedIterations = history.empty() ? 0 : history.size() - 1;
+        o.stat = QString("%1 contour points  -  %2 iterations  -  %3 ms").arg(finalC.size()).arg(usedIterations).arg(ms);
+        o.log << QString("alpha=%1  beta=%2  gamma=%3  window=%4  sigma=%5  balloon=%6  max iterations=%7  points=%8")
+                     .arg(sp.alpha).arg(sp.beta).arg(sp.gamma).arg(sp.window).arg(sp.sigma).arg(sp.balloon).arg(sp.iterations).arg(init.size())
+              << (usedIterations < size_t(sp.iterations) ? QString("Converged after %1 iterations (no point moved any more).").arg(usedIterations)
+                                                         : QString("Stopped at the maximum of %1 iterations.").arg(sp.iterations))
               << QString("Finished in %1 ms. Go to 'Chain Code' to analyse the final contour.").arg(ms);
         bool moved = !(finalC == init);
-        if (!moved) o.log << "(Contour did not move - or the snake algorithm is not implemented yet.)";
+        if (!moved) o.log << "(Contour did not move - try a larger window, a larger sigma or a start circle closer to the object.)";
         o.contour = finalC;
         o.save = isReady("snake") || moved;
         return o;
