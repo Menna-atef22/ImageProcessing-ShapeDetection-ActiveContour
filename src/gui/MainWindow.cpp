@@ -56,7 +56,10 @@ constexpr double kPi = 3.14159265358979;
 
 // Flip a feature to `true` once its algorithm is implemented: its results then get saved to the library.
 // (While false, an empty result - "0 circles" - is shown but not saved, so the Compare tab stays clean.)
-bool isReady(const QString& feature) { return feature == "canny" || feature == "lines" || feature == "snake"; }
+bool isReady(const QString& feature) {
+    return feature == "canny" || feature == "lines" || feature == "circles" || feature == "ellipses" ||
+           feature == "snake" || feature == "chain";
+}
 
 void repolish(QWidget* w) {
     w->style()->unpolish(w);
@@ -548,7 +551,7 @@ QWidget* MainWindow::buildCirclesPage() {
     connect(run, &QPushButton::clicked, this, &MainWindow::runCircles);
     QLabel* stat = nullptr;
     return makePage(2, "Finds circles and reports each centre and radius. Detected circles are drawn on top of the image.", false,
-                    "Uses the Canny settings from the Canny Edges page. Algorithm is still being implemented.",
+                    "Uses the Canny settings from the Canny Edges page. (edges are computed automatically).",
                     {mn, mx, votes, maxn}, run, &stat);
 }
 
@@ -560,8 +563,8 @@ QWidget* MainWindow::buildEllipsesPage() {
     auto* run = new QPushButton("Detect Ellipses");
     connect(run, &QPushButton::clicked, this, &MainWindow::runEllipses);
     QLabel* stat = nullptr;
-    return makePage(3, "Finds ellipses (centre, axes, orientation) using the method from the assigned paper.", false,
-                    "Uses the Canny settings from the Canny Edges page. Algorithm is still being implemented.",
+    return makePage(3, "Finds ellipses (centre, axes, orientation) using the method from the assigned paper.", isReady("ellipses"),
+                    "Uses the Canny settings from the Canny Edges page. (edges are computed automatically).",
                     {mn, mx, votes, maxn}, run, &stat);
 }
 
