@@ -5,7 +5,7 @@
 #include "../common/Types.h"
 
 // ---------------------------------------------------------------
-// Ellipse detection (based on the paper the TA gives)  [TODO]
+// Ellipse detection (Xie & Ji 1D Hough method + outline-support check)
 // ---------------------------------------------------------------
 struct EllipseParams {
     int minAxis = 10;

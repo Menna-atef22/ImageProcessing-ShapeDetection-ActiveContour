@@ -118,3 +118,22 @@ git checkout -b feature/chaincode-gui
 
 باقي الأجزاء لقوا في الـ stubs نفس الـ interface جاهز، وبياخدوا `GrayImage edges` من
 `EdgeDetector::canny(...).edges` ويرسموا النتيجة بـ `Draw::*`.
+
+
+---
+
+## Command-line runner (ipcli) - English
+
+`ipcli` is built together with the GUI (`cmake --build build`). It needs no window:
+
+```bash
+tools/run_all.sh                       # every image -> results/cli_output/  (Windows: tools\run_all.bat)
+build/ipcli <image> <outDir> [options]
+  --canny sigma low high               # default 1.4 0.05 0.15
+  --lines | --lineparams ratio minVotes maxLines
+  --circles minR maxR minVotes
+  --ellipses minA maxA minVotes
+  --snake cx cy r  [--points n --alpha a --beta b --gamma g --balloon k --iter n --window w --sigma s]
+```
+Outputs per image: `*_canny_edges.png`, `*_canny_overlay.png`, `*_lines.png`, `*_circles.png`, `*_ellipses.png`,
+`*_snake.png`, `*_chaincode.txt` (start pixel, full chain code, perimeter, area) and `*_report.txt`.

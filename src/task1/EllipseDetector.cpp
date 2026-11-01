@@ -17,6 +17,32 @@ double angleDiffPi(double a1, double a2) {
     return std::min(d, kPi - d);
 }
 
+// A candidate is only accepted if enough of its outline is really supported by edge pixels. This
+// removes the false ellipses that the voting step produces from a few partial arcs / unrelated edges.
+constexpr double kMinOutlineSupport = 0.85;  // fraction of outline samples that must lie near an edge pixel
+constexpr int kSupportTolerance = 3;         // px; also covers the two sides of a thick outline
+
+double outlineSupport(const GrayImage& edges, const Ellipse& e) {
+    const double perim = kPi * (1.5 * (e.a + e.b) - std::sqrt(e.a * e.b));
+    const int n = std::max(24, int(perim));
+    const double ca = std::cos(e.angle), sa = std::sin(e.angle);
+    int hits = 0;
+    for (int i = 0; i < n; ++i) {
+        const double t = 2.0 * kPi * i / n;
+        const double ex = e.a * std::cos(t), ey = e.b * std::sin(t);
+        const int px = int(std::lround(e.cx + ex * ca - ey * sa));
+        const int py = int(std::lround(e.cy + ex * sa + ey * ca));
+        bool near = false;
+        for (int dy = -kSupportTolerance; dy <= kSupportTolerance && !near; ++dy)
+            for (int dx = -kSupportTolerance; dx <= kSupportTolerance; ++dx) {
+                const int x = px + dx, y = py + dy;
+                if (x >= 0 && y >= 0 && x < edges.width && y < edges.height && edges.at(x, y) > 0.f) { near = true; break; }
+            }
+        if (near) ++hits;
+    }
+    return double(hits) / n;
+}
+
 }  // namespace
 
 // -----------------------------------------------------------------------------
@@ -178,7 +204,7 @@ std::vector<Ellipse> EllipseDetector::detect(const GrayImage& edges, const Ellip
                 break;
             }
         }
-        if (!duplicate) {
+        if (!duplicate && outlineSupport(edges, c) >= kMinOutlineSupport) {
             kept.push_back(c);
             if (int(kept.size()) >= params.maxEllipses) break;
         }

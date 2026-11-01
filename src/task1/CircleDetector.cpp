@@ -35,6 +35,29 @@ std::vector<Point> circleOffsets(int r) {
     return pts;
 }
 
+// A circle is only accepted if most of its outline is supported by edge pixels. This rejects the
+// false circles that fit a short arc (e.g. the curved tip of an ellipse) with enough votes.
+constexpr double kMinOutlineSupport = 0.80;  // fraction of outline samples that must lie near an edge pixel
+constexpr int kSupportTolerance = 3;         // px; also covers both sides of a thick outline
+
+double outlineSupport(const GrayImage& edges, const Circle& c) {
+    const int n = std::max(24, int(2.0 * 3.14159265358979323846 * c.r));
+    int hits = 0;
+    for (int i = 0; i < n; ++i) {
+        const double t = 2.0 * 3.14159265358979323846 * i / n;
+        const int px = int(std::lround(c.cx + c.r * std::cos(t)));
+        const int py = int(std::lround(c.cy + c.r * std::sin(t)));
+        bool near = false;
+        for (int dy = -kSupportTolerance; dy <= kSupportTolerance && !near; ++dy)
+            for (int dx = -kSupportTolerance; dx <= kSupportTolerance; ++dx) {
+                const int x = px + dx, y = py + dy;
+                if (x >= 0 && y >= 0 && x < edges.width && y < edges.height && edges.at(x, y) > 0.f) { near = true; break; }
+            }
+        if (near) ++hits;
+    }
+    return double(hits) / n;
+}
+
 }  // namespace
 
 std::vector<Circle> CircleDetector::detect(const GrayImage& edges, const HoughCircleParams& params) {
@@ -129,7 +152,7 @@ std::vector<Circle> CircleDetector::detect(const GrayImage& edges, const HoughCi
                 break;
             }
         }
-        if (!duplicate) {
+        if (!duplicate && outlineSupport(edges, c) >= kMinOutlineSupport) {
             kept.push_back(c);
             if (int(kept.size()) >= params.maxCircles) break;
         }

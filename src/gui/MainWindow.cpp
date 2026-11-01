@@ -11,6 +11,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
@@ -30,6 +31,7 @@
 #include <QStackedWidget>
 #include <QStyle>
 #include <QTabWidget>
+#include <QTextStream>
 #include <QThreadPool>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -550,7 +552,7 @@ QWidget* MainWindow::buildCirclesPage() {
     auto* run = new QPushButton("Detect Circles");
     connect(run, &QPushButton::clicked, this, &MainWindow::runCircles);
     QLabel* stat = nullptr;
-    return makePage(2, "Finds circles and reports each centre and radius. Detected circles are drawn on top of the image.", false,
+    return makePage(2, "Finds circles and reports each centre and radius. Detected circles are drawn on top of the image.", isReady("circles"),
                     "Uses the Canny settings from the Canny Edges page. (edges are computed automatically).",
                     {mn, mx, votes, maxn}, run, &stat);
 }
@@ -633,7 +635,7 @@ QWidget* MainWindow::buildChainPage() {
     gl->addWidget(makeStat("AREA", &m_chArea));
 
     return makePage(5, "Converts the final snake contour into an 8-direction Freeman chain code and measures the perimeter and the area inside it.",
-                    false, "Run the Active Contour page first - this page analyses its final contour.", {grid}, run, nullptr);
+                    isReady("chain"), "Run the Active Contour page first - this page analyses its final contour.", {grid}, run, nullptr);
 }
 
 QWidget* MainWindow::buildWorkspace() {
@@ -1051,6 +1053,24 @@ void MainWindow::finish(const QString& feature, bool ready, ResultStore::Entry b
         ResultStore::Entry saved = m_store->add(base, o.image);
         showResult(o.image, o.title, "Saved", true);
         log("Saved to: " + QDir::toNativeSeparators(m_store->absPath(saved.file)));
+        if (feature == "chain") {
+            const QString png = m_store->absPath(saved.file);
+            const QString txtPath = png.left(png.lastIndexOf('.')) + "_chaincode.txt";
+            QFile f(txtPath);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                QTextStream ts(&f);
+                ts << "Freeman 8-direction chain code (0=E 1=NE 2=N 3=NW 4=W 5=SW 6=S 7=SE; image y axis points down)\n"
+                   << "image: " << base.imageName << "\n"
+                   << "start pixel (x y): " << o.extra["startX"].toInt() << " " << o.extra["startY"].toInt() << "\n"
+                   << "moves: " << o.extra["chainCode"].toString().size() << "\n"
+                   << "perimeter_polygon: " << QString::number(o.extra["perimeter"].toDouble(), 'f', 2) << "\n"
+                   << "perimeter_chain: " << QString::number(o.extra["chainPerimeter"].toDouble(), 'f', 2) << "\n"
+                   << "area_polygon: " << QString::number(o.extra["area"].toDouble(), 'f', 2) << "\n"
+                   << "area_chain: " << QString::number(o.extra["chainArea"].toDouble(), 'f', 2) << "\n"
+                   << "chain code:\n" << o.extra["chainCode"].toString() << "\n";
+                log("Chain code saved to: " + QDir::toNativeSeparators(txtPath));
+            }
+        }
         updateFeatureStats(feature, saved);
     } else {
         showResult(o.image, o.title, "Not saved (empty result)", false);
@@ -1309,18 +1329,24 @@ void MainWindow::runChain() {
         o.image = out;
         o.title = "Final contour (red dot = chain-code start)";
         o.stat = QString("%1 points  -  perimeter %2  -  area %3").arg(m.numPoints).arg(m.perimeter, 0, 'f', 1).arg(m.area, 0, 'f', 1);
-        o.log << QString("Points    : %1").arg(m.numPoints) << QString("Perimeter : %1 px").arg(m.perimeter, 0, 'f', 2)
-              << QString("Area      : %1 px^2").arg(m.area, 0, 'f', 2);
-        QString code;
-        for (int c : m.chainCode) code += QString::number(c);
+        o.log << QString("Points    : %1").arg(m.numPoints)
+              << QString("Perimeter : %1 px (polygon)   %2 px (chain code: even = 1, odd = sqrt 2)").arg(m.perimeter, 0, 'f', 2).arg(m.chainPerimeter, 0, 'f', 2)
+              << QString("Area      : %1 px^2 (polygon, shoelace)   %2 px^2 (chain code)").arg(m.area, 0, 'f', 2).arg(m.chainArea, 0, 'f', 2)
+              << QString("Start pixel of the chain code: (%1, %2)").arg(m.start.x).arg(m.start.y);
+        QString code = QString::fromStdString(ContourAnalysis::toString(m.chainCode));
         QString shown = code.size() > 400 ? code.left(400) + "..." : code;
-        o.log << "Chain code (" + QString::number(m.chainCode.size()) + " moves): " + (shown.isEmpty() ? "-" : shown);
+        o.log << "Chain code (" + QString::number(m.chainCode.size()) + " moves): " + (shown.isEmpty() ? "-" : shown)
+                     + (code.size() > 400 ? "   (the full code is saved next to the result image as *_chaincode.txt)" : QString());
         bool empty = m.chainCode.empty() && m.perimeter == 0.0;
         if (empty) o.log << "(Empty result - the chain-code module is not implemented yet.)";
         o.extra["points"] = m.numPoints;
         o.extra["perimeter"] = m.perimeter;
         o.extra["area"] = m.area;
         o.extra["chainCode"] = code;
+        o.extra["chainPerimeter"] = m.chainPerimeter;
+        o.extra["chainArea"] = m.chainArea;
+        o.extra["startX"] = m.start.x;
+        o.extra["startY"] = m.start.y;
         o.save = isReady("chain") || !empty;
         return o;
     });
