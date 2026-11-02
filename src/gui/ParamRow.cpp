@@ -26,8 +26,13 @@ public:
         for (QWidget* p = w->parentWidget(); p; p = p->parentWidget())
             if (auto* sa = qobject_cast<QScrollArea*>(p)) {
                 auto* we = static_cast<QWheelEvent*>(e);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
                 QWheelEvent copy(we->position(), we->globalPosition(), we->pixelDelta(), we->angleDelta(), we->buttons(),
                                  we->modifiers(), we->phase(), we->inverted());
+#else
+                QWheelEvent copy(we->posF(), we->globalPosF(), we->pixelDelta(), we->angleDelta(), we->buttons(),
+                                 we->modifiers(), we->phase(), we->inverted());
+#endif
                 QApplication::sendEvent(sa->viewport(), &copy);
                 break;
             }

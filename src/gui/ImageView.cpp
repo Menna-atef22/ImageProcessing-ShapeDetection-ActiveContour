@@ -107,17 +107,26 @@ void ImageView::paintEvent(QPaintEvent*) {
 
 void ImageView::resizeEvent(QResizeEvent*) { clampCenter(); }
 
+// Qt5/Qt6 compatible mouse position
+static QPointF mousePos(QMouseEvent* e) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    return e->position();
+#else
+    return e->localPos();
+#endif
+}
+
 void ImageView::mousePressEvent(QMouseEvent* e) {
     if (m_img.isNull() || e->button() != Qt::LeftButton) return;
     m_down = true;
     m_dragging = false;
-    m_pressPos = e->position();
+    m_pressPos = mousePos(e);
     m_pressCenter = m_center;
 }
 
 void ImageView::mouseMoveEvent(QMouseEvent* e) {
     if (!m_down) return;
-    QPointF d = e->position() - m_pressPos;
+    QPointF d = mousePos(e) - m_pressPos;
     if (!m_dragging && std::hypot(d.x(), d.y()) < 4) return;
     m_dragging = true;
     setCursor(Qt::ClosedHandCursor);
@@ -134,7 +143,7 @@ void ImageView::mouseReleaseEvent(QMouseEvent* e) {
     unsetCursor();
     if (m_dragging) return;
     QRectF r = targetRect();
-    QPointF pos = e->position();
+    QPointF pos = mousePos(e);
     if (!r.contains(pos)) return;
     int x = int((pos.x() - r.x()) * m_img.width() / r.width());
     int y = int((pos.y() - r.y()) * m_img.height() / r.height());
@@ -148,7 +157,11 @@ void ImageView::wheelEvent(QWheelEvent* e) {
     double steps = e->angleDelta().y() / 120.0;
     if (steps == 0) return;
     QRectF r = targetRect();
+    #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     QPointF cur = e->position();
+#else
+    QPointF cur = e->posF();
+#endif
     QPointF imgPt((cur.x() - r.x()) / r.width(), (cur.y() - r.y()) / r.height());  // point under the cursor
     m_zoom = std::clamp(m_zoom * std::pow(1.2, steps), 1.0, 40.0);
     double s = baseScale() * m_zoom;

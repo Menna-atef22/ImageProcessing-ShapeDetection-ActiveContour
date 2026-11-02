@@ -2,7 +2,6 @@
 
 #include <cmath>
 #include <cstdlib>
-#include <string>
 
 namespace {
 
@@ -53,56 +52,10 @@ void appendSegmentChainCode(const Point& p0, const Point& p1, std::vector<int>& 
 ContourMeasurements ContourAnalysis::analyze(const std::vector<Point>& c) {
     ContourMeasurements m;
     m.numPoints = int(c.size());
-    if (!c.empty()) m.start = c[0];
     m.chainCode = chainCode(c);
     m.perimeter = perimeter(c);
     m.area = area(c);
-    m.chainPerimeter = chainPerimeter(m.chainCode);
-    m.chainArea = chainArea(m.chainCode);
     return m;
-}
-
-namespace {
-// (dx, dy) of each Freeman direction; inverse of freemanDirection().
-constexpr int kDx[8] = {1, 1, 0, -1, -1, -1, 0, 1};
-constexpr int kDy[8] = {0, -1, -1, -1, 0, 1, 1, 1};
-}  // namespace
-
-double ContourAnalysis::chainPerimeter(const std::vector<int>& code) {
-    double sum = 0.0;
-    for (int c : code) sum += (c % 2 == 0) ? 1.0 : std::sqrt(2.0);
-    return sum;
-}
-
-double ContourAnalysis::chainArea(const std::vector<int>& code) {
-    // Walk the closed pixel path from (0, 0); each move adds the trapezoid (x + (x + dx)) / 2 * dy
-    // (Green's theorem), i.e. the exact area of the polygon through the visited pixel centres.
-    long long x = 0, twiceSum = 0;
-    for (int c : code) {
-        if (c < 0 || c > 7) continue;
-        twiceSum += (2 * x + kDx[c]) * kDy[c];
-        x += kDx[c];
-    }
-    return std::fabs(double(twiceSum)) / 2.0;
-}
-
-std::string ContourAnalysis::toString(const std::vector<int>& code) {
-    std::string s;
-    s.reserve(code.size());
-    for (int c : code) s.push_back(char('0' + c));
-    return s;
-}
-
-std::vector<Point> ContourAnalysis::decode(const Point& start, const std::vector<int>& code) {
-    std::vector<Point> path{start};
-    Point p = start;
-    for (int c : code) {
-        if (c < 0 || c > 7) continue;
-        p.x += kDx[c];
-        p.y += kDy[c];
-        path.push_back(p);
-    }
-    return path;
 }
 
 std::vector<int> ContourAnalysis::chainCode(const std::vector<Point>& contour) {

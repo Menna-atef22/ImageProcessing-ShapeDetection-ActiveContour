@@ -11,7 +11,6 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QElapsedTimer>
-#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
@@ -31,7 +30,6 @@
 #include <QStackedWidget>
 #include <QStyle>
 #include <QTabWidget>
-#include <QTextStream>
 #include <QThreadPool>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -74,6 +72,46 @@ void drawPolyline(RgbImage& img, const std::vector<Point>& pts, Color c, bool cl
     for (size_t i = 0; i + 1 < pts.size(); ++i) Draw::line(img, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y, c, 2);
     if (closed) Draw::line(img, pts.back().x, pts.back().y, pts.front().x, pts.front().y, c, 2);
     for (const Point& p : pts) Draw::dot(img, p.x, p.y, 2, c);
+}
+
+// Known test contours for the Chain Code page: the correct perimeter / area are known exactly,
+// so the calculations can be verified without running the snake first.
+struct KnownShape {
+    QString name;
+    std::vector<Point> pts;  // ordered, closed (last point connects back to the first)
+    double perimeter = 0.0, area = 0.0;
+};
+
+KnownShape knownShape(int index) {
+    KnownShape k;
+    switch (index) {
+        case 1:
+            k.name = "Square 100x100";
+            k.pts = {{30, 30}, {130, 30}, {130, 130}, {30, 130}};
+            k.perimeter = 400.0, k.area = 10000.0;
+            break;
+        case 2:
+            k.name = "Rectangle 120x60";
+            k.pts = {{30, 30}, {150, 30}, {150, 90}, {30, 90}};
+            k.perimeter = 360.0, k.area = 7200.0;
+            break;
+        case 3:
+            k.name = "Right triangle 90-120-150";
+            k.pts = {{30, 30}, {150, 30}, {30, 120}};
+            k.perimeter = 360.0, k.area = 5400.0;
+            break;
+        default: {
+            k.name = "Circle r=60 (72-gon)";
+            const int n = 72;
+            const double r = 60.0, pi = 3.14159265358979323846;
+            for (int i = 0; i < n; ++i)
+                k.pts.push_back({int(std::lround(90 + r * std::cos(2 * pi * i / n))), int(std::lround(90 + r * std::sin(2 * pi * i / n)))});
+            k.perimeter = n * 2 * r * std::sin(pi / n);
+            k.area = 0.5 * n * r * r * std::sin(2 * pi / n);
+            break;
+        }
+    }
+    return k;
 }
 
 QWidget* withMargins(QWidget* inner, int l = 14, int t = 10, int r = 14, int b = 12) {
@@ -456,7 +494,8 @@ int MainWindow::PI(const QString& key) const { return m_params.value(key)->intVa
 QJsonObject MainWindow::valuesFor(const QString& feature) const {
     QJsonObject o;
     if (feature == "chain") {
-        o["contour"] = hashPoints(m_snake);
+        o["chain.source"] = m_combos.value("chain.source")->currentIndex();
+        o["contour"] = hashPoints(chainContour());
         return o;
     }
     auto add = [&](const QString& f, bool skipView) {
@@ -488,7 +527,8 @@ QStringList MainWindow::paramLines(const QString& feature) const {
     add(feature, QString(), false);
     if (feature == "lines" || feature == "circles" || feature == "ellipses") add("canny", "Canny - ", true);
     if (feature == "snake" && polygonMode()) out << QString("Start outline = %1 clicked points").arg(m_snakePoly.size());
-    if (feature == "chain") out << QString("Snake contour points = %1").arg(m_snake.size());
+    if (feature == "chain") out << QString("Contour source = %1").arg(m_combos.value("chain.source")->currentText())
+                                << QString("Contour points = %1").arg(chainContour().size());
     return out;
 }
 
@@ -552,7 +592,7 @@ QWidget* MainWindow::buildCirclesPage() {
     auto* run = new QPushButton("Detect Circles");
     connect(run, &QPushButton::clicked, this, &MainWindow::runCircles);
     QLabel* stat = nullptr;
-    return makePage(2, "Finds circles and reports each centre and radius. Detected circles are drawn on top of the image.", isReady("circles"),
+    return makePage(2, "Finds circles and reports each centre and radius. Detected circles are drawn on top of the image.", false,
                     "Uses the Canny settings from the Canny Edges page. (edges are computed automatically).",
                     {mn, mx, votes, maxn}, run, &stat);
 }
@@ -614,6 +654,10 @@ QWidget* MainWindow::buildChainPage() {
     auto* run = new QPushButton("Analyze Contour");
     connect(run, &QPushButton::clicked, this, &MainWindow::runChain);
 
+    auto* source = addCombo("chain", "source", "Contour source",
+                            {"Snake result (from Active Contour)", "Test: Square 100x100", "Test: Rectangle 120x60",
+                             "Test: Right triangle 90-120-150", "Test: Circle r=60 (72 points)"});
+
     auto makeStat = [&](const QString& name, QLabel** out) {
         auto* w = new QWidget;
         auto* l = new QVBoxLayout(w);
@@ -634,8 +678,38 @@ QWidget* MainWindow::buildChainPage() {
     gl->addWidget(makeStat("PERIMETER", &m_chPerimeter));
     gl->addWidget(makeStat("AREA", &m_chArea));
 
-    return makePage(5, "Converts the final snake contour into an 8-direction Freeman chain code and measures the perimeter and the area inside it.",
-                    isReady("chain"), "Run the Active Contour page first - this page analyses its final contour.", {grid}, run, nullptr);
+    m_chCheck = new QLabel("-");
+    m_chCheck->setObjectName("muted");
+    m_chCheck->setWordWrap(true);
+
+    auto* codeTitle = new QLabel("Chain code (0=E 1=NE 2=N 3=NW 4=W 5=SW 6=S 7=SE)");
+    codeTitle->setObjectName("statName");
+    m_chCode = new QPlainTextEdit;
+    m_chCode->setReadOnly(true);
+    m_chCode->setMinimumHeight(90);
+    m_chCode->setMaximumHeight(140);
+    m_chCode->setPlaceholderText("The chain code appears here after you press Analyze Contour.");
+    auto* codeBox = new QWidget;
+    auto* cl = new QVBoxLayout(codeBox);
+    cl->setContentsMargins(0, 4, 0, 4);
+    cl->setSpacing(2);
+    cl->addWidget(codeTitle);
+    cl->addWidget(m_chCode);
+
+    return makePage(5, "Converts an ordered closed contour into an 8-direction Freeman chain code and measures its perimeter and area (shoelace formula).",
+                    isReady("chain"),
+                    "Source = 'Snake result' analyses the final contour of the Active Contour page (run it first). The 'Test' sources are shapes with known "
+                    "perimeter and area, used to check that the calculations are correct.",
+                    {source, grid, m_chCheck, codeBox}, run, nullptr);
+}
+
+void MainWindow::setChainSource(int index) {
+    if (m_combos.contains("chain.source")) m_combos["chain.source"]->setCurrentIndex(index);
+}
+
+std::vector<Point> MainWindow::chainContour() const {
+    int src = m_combos.value("chain.source")->currentIndex();
+    return src == 0 ? m_snake : knownShape(src).pts;
 }
 
 QWidget* MainWindow::buildWorkspace() {
@@ -993,7 +1067,7 @@ void MainWindow::setBusy(bool busy, const QString& what) {
 // =====================================================================
 void MainWindow::launch(const QString& feature, bool ready, std::function<Outcome()> work) {
     if (m_busy || !requireImage()) return;
-    if (feature == "chain" && m_snake.empty()) {
+    if (feature == "chain" && chainContour().empty()) {
         log("No contour yet - run 'Active Contour' first.");
         return;
     }
@@ -1053,24 +1127,6 @@ void MainWindow::finish(const QString& feature, bool ready, ResultStore::Entry b
         ResultStore::Entry saved = m_store->add(base, o.image);
         showResult(o.image, o.title, "Saved", true);
         log("Saved to: " + QDir::toNativeSeparators(m_store->absPath(saved.file)));
-        if (feature == "chain") {
-            const QString png = m_store->absPath(saved.file);
-            const QString txtPath = png.left(png.lastIndexOf('.')) + "_chaincode.txt";
-            QFile f(txtPath);
-            if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                QTextStream ts(&f);
-                ts << "Freeman 8-direction chain code (0=E 1=NE 2=N 3=NW 4=W 5=SW 6=S 7=SE; image y axis points down)\n"
-                   << "image: " << base.imageName << "\n"
-                   << "start pixel (x y): " << o.extra["startX"].toInt() << " " << o.extra["startY"].toInt() << "\n"
-                   << "moves: " << o.extra["chainCode"].toString().size() << "\n"
-                   << "perimeter_polygon: " << QString::number(o.extra["perimeter"].toDouble(), 'f', 2) << "\n"
-                   << "perimeter_chain: " << QString::number(o.extra["chainPerimeter"].toDouble(), 'f', 2) << "\n"
-                   << "area_polygon: " << QString::number(o.extra["area"].toDouble(), 'f', 2) << "\n"
-                   << "area_chain: " << QString::number(o.extra["chainArea"].toDouble(), 'f', 2) << "\n"
-                   << "chain code:\n" << o.extra["chainCode"].toString() << "\n";
-                log("Chain code saved to: " + QDir::toNativeSeparators(txtPath));
-            }
-        }
         updateFeatureStats(feature, saved);
     } else {
         showResult(o.image, o.title, "Not saved (empty result)", false);
@@ -1085,6 +1141,9 @@ void MainWindow::updateFeatureStats(const QString& feature, const ResultStore::E
         m_chPoints->setText(QString::number(e.extra["points"].toInt()));
         m_chPerimeter->setText(QString::number(e.extra["perimeter"].toDouble(), 'f', 1));
         m_chArea->setText(QString::number(e.extra["area"].toDouble(), 'f', 1));
+        m_chCode->setPlainText(e.extra["chainCode"].toString());
+        QString chk = e.extra["check"].toString();
+        m_chCheck->setText(chk.isEmpty() ? "-" : chk);
     }
 }
 
@@ -1319,35 +1378,40 @@ void MainWindow::runSnake() {
 }
 
 void MainWindow::runChain() {
-    std::vector<Point> contour = m_snake;
-    launch("chain", isReady("chain"), [this, contour] {
+    const int src = m_combos.value("chain.source")->currentIndex();
+    std::vector<Point> contour = chainContour();
+    const KnownShape known = src > 0 ? knownShape(src) : KnownShape{};
+    launch("chain", isReady("chain"), [this, contour, src, known] {
         Outcome o;
         ContourMeasurements m = ContourAnalysis::analyze(contour);
         RgbImage out = m_original;
         drawPolyline(out, contour, {255, 230, 0});
         if (!contour.empty()) Draw::dot(out, contour[0].x, contour[0].y, 4, {255, 0, 0});  // chain-code start point
         o.image = out;
-        o.title = "Final contour (red dot = chain-code start)";
+        o.title = src > 0 ? "Test contour: " + known.name + " (red dot = chain-code start)" : "Final contour (red dot = chain-code start)";
         o.stat = QString("%1 points  -  perimeter %2  -  area %3").arg(m.numPoints).arg(m.perimeter, 0, 'f', 1).arg(m.area, 0, 'f', 1);
-        o.log << QString("Points    : %1").arg(m.numPoints)
-              << QString("Perimeter : %1 px (polygon)   %2 px (chain code: even = 1, odd = sqrt 2)").arg(m.perimeter, 0, 'f', 2).arg(m.chainPerimeter, 0, 'f', 2)
-              << QString("Area      : %1 px^2 (polygon, shoelace)   %2 px^2 (chain code)").arg(m.area, 0, 'f', 2).arg(m.chainArea, 0, 'f', 2)
-              << QString("Start pixel of the chain code: (%1, %2)").arg(m.start.x).arg(m.start.y);
-        QString code = QString::fromStdString(ContourAnalysis::toString(m.chainCode));
+        o.log << QString("Points    : %1").arg(m.numPoints) << QString("Perimeter : %1 px").arg(m.perimeter, 0, 'f', 2)
+              << QString("Area      : %1 px^2").arg(m.area, 0, 'f', 2);
+        QString code;
+        for (int c : m.chainCode) code += QString::number(c);
         QString shown = code.size() > 400 ? code.left(400) + "..." : code;
-        o.log << "Chain code (" + QString::number(m.chainCode.size()) + " moves): " + (shown.isEmpty() ? "-" : shown)
-                     + (code.size() > 400 ? "   (the full code is saved next to the result image as *_chaincode.txt)" : QString());
-        bool empty = m.chainCode.empty() && m.perimeter == 0.0;
-        if (empty) o.log << "(Empty result - the chain-code module is not implemented yet.)";
+        o.log << "Chain code (" + QString::number(m.chainCode.size()) + " moves): " + (shown.isEmpty() ? "-" : shown);
+        QString check;
+        if (src > 0) {
+            auto close = [](double got, double want) { return std::fabs(got - want) <= 0.01 * want; };
+            bool ok = close(m.perimeter, known.perimeter) && close(m.area, known.area);
+            check = QString("%1 expected perimeter %2, area %3  ->  got %4 / %5")
+                        .arg(ok ? "PASS:" : "FAIL:")
+                        .arg(known.perimeter, 0, 'f', 1).arg(known.area, 0, 'f', 1)
+                        .arg(m.perimeter, 0, 'f', 1).arg(m.area, 0, 'f', 1);
+            o.log << check;
+        }
         o.extra["points"] = m.numPoints;
         o.extra["perimeter"] = m.perimeter;
         o.extra["area"] = m.area;
         o.extra["chainCode"] = code;
-        o.extra["chainPerimeter"] = m.chainPerimeter;
-        o.extra["chainArea"] = m.chainArea;
-        o.extra["startX"] = m.start.x;
-        o.extra["startY"] = m.start.y;
-        o.save = isReady("chain") || !empty;
+        o.extra["check"] = check;
+        o.save = true;
         return o;
     });
 }

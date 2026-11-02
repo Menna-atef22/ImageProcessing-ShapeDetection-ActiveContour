@@ -39,6 +39,7 @@ public:
     // also used by --shot / automated checks
     bool loadImage(const QString& path);
     void selectPage(int index);
+    void setChainSource(int index);
     void selectTab(int index);
     void runCurrent();
     void compareLatest(int n);  // select the n newest saved results in the Compare tab
@@ -73,6 +74,7 @@ private:
     QWidget* buildCirclesPage();
     QWidget* buildEllipsesPage();
     QWidget* buildSnakePage();
+    std::vector<Point> chainContour() const;  // contour the Chain Code page analyses (snake result or a known test shape)
     QWidget* buildChainPage();
 
     // parameter registry: every control is registered under "<feature>.<name>"
@@ -137,7 +139,8 @@ private:
     QProgressBar* m_progress = nullptr;
     QList<QPushButton*> m_runButtons;
     QMap<QString, QLabel*> m_stats;
-    QLabel *m_chPoints = nullptr, *m_chPerimeter = nullptr, *m_chArea = nullptr;
+    QLabel *m_chPoints = nullptr, *m_chPerimeter = nullptr, *m_chArea = nullptr, *m_chCheck = nullptr;
+    QPlainTextEdit* m_chCode = nullptr;  // chain code text box of the Chain Code page
 
     // parameter registry
     QMap<QString, ParamRow*> m_params;

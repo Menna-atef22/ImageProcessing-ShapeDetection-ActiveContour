@@ -5,7 +5,7 @@
 #include "../common/Types.h"
 
 // ---------------------------------------------------------------
-// Circle detection (Hough Circle Transform)
+// Circle detection (Hough Circle Transform)  [TODO]
 // Input: binary edge map from EdgeDetector::canny(...).edges
 // ---------------------------------------------------------------
 struct HoughCircleParams {

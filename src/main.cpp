@@ -19,7 +19,8 @@ int main(int argc, char* argv[]) {
     QCommandLineOption tab("tab", "Main tab (0 workspace, 1 compare).", "n", "0");
     QCommandLineOption run("run", "Press the Run button of the selected page.");
     QCommandLineOption cmp("compare", "Select the N newest results in the Compare tab.", "n");
-    cli.addOptions({shot, image, page, tab, run, cmp});
+    QCommandLineOption chainSrc("chain-source", "Chain code source (0 snake, 1-4 known test shapes).", "n");
+    cli.addOptions({chainSrc, shot, image, page, tab, run, cmp});
     cli.process(app);
 
     MainWindow w;
@@ -27,6 +28,7 @@ int main(int argc, char* argv[]) {
     if (cli.isSet(image)) w.loadImage(cli.value(image));
     w.selectPage(cli.value(page).toInt());
     w.selectTab(cli.value(tab).toInt());
+    if (cli.isSet(chainSrc)) w.setChainSource(cli.value(chainSrc).toInt());
     if (cli.isSet(run)) w.runCurrent();
     if (cli.isSet(cmp)) w.compareLatest(cli.value(cmp).toInt());
     if (cli.isSet(shot)) {

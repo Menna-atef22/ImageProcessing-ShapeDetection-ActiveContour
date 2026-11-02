@@ -52,7 +52,3 @@ if(WIN32)
     message(WARNING "windeployqt not found - run it manually if the exe complains about missing DLLs")
   endif()
 endif()
-
-# ---- command-line runner (no window): batch-produces every result + a text report ----
-add_executable(ipcli src/cli/main_cli.cpp)
-target_link_libraries(ipcli PRIVATE ipcore)
